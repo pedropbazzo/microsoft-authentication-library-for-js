@@ -7,6 +7,7 @@ import { AADServerParamKeys, SSOTypes } from "../utils/Constants";
 import { Constants } from "../utils/Constants";
 import { ScopeSet } from "../request/ScopeSet";
 import { ClientConfigurationError } from "../error/ClientConfigurationError";
+import { StringDict } from '../utils/MsalTypes';
 
 export class RequestParameterBuilder {
 
@@ -185,6 +186,16 @@ export class RequestParameterBuilder {
      */
     addGrantType(grantType: string): void {
         this.parameters.set(AADServerParamKeys.GRANT_TYPE, encodeURIComponent(grantType));
+    }
+
+    /**
+     * add extraQueryParams
+     * @param eQparams
+     */
+    addExtraQueryParameters(eQparams: StringDict) {
+        Object.keys(eQparams).forEach((key) => {
+            this.parameters.set(key, eQparams[key]);
+        });
     }
 
     /**

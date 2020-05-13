@@ -5,7 +5,8 @@
 
 import { StringUtils } from "./../utils/StringUtils";
 import { ClientConfigurationError } from "./../error/ClientConfigurationError";
-import { PromptValue, CodeChallengeMethodValues } from "./../utils/Constants";
+import { PromptValue, CodeChallengeMethodValues, BlacklistedEQParams, SSOTypes } from "./../utils/Constants";
+import { StringDict } from "../utils/MsalTypes";
 
 /**
  * Validates server consumable params from the "request" objects
@@ -65,5 +66,39 @@ export class RequestValidator {
         ) {
             throw ClientConfigurationError.createInvalidCodeChallengeMethodError();
         }
+    }
+
+
+    /**
+     * Removes unnecessary or duplicate query parameters from extraQueryParameters
+     * @param request
+     */
+    private sanitizeEQParams(eQParams: StringDict, ssoQueryParams: StringDict) : StringDict {
+        if (!eQParams) {
+            return null;
+        }
+
+        // Remove any query parameters that are blacklisted
+        BlacklistedEQParams.forEach(param => {
+            if (eQParams[param]) {
+                // TODO: this.logger.error("Removed duplicate " + param + " from extraQueryParameters. Please use the " + param + " field in request object.");
+                delete eQParams[param];
+            }
+        });
+
+        // Remove any query parameters already included in SSO params
+        Object.keys(ssoQueryParams).forEach(key => {
+            if (eQParams[key]) {
+                // TODO: this.logger.error("Removed param " + key + " from extraQueryParameters since it was already present in library query parameters.")
+                delete eQParams[key];
+            }
+
+            if (key === SSOTypes.SID) {
+                // TODO: this.logger.error("Removed domain hint since sid was provided.")
+                delete eQParams[SSOTypes.DOMAIN_HINT];
+            }
+        });
+
+        return eQParams;
     }
 }

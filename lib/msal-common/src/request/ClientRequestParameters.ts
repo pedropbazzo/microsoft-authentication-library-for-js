@@ -14,7 +14,7 @@ import { StringDict } from "../utils/MsalTypes";
  */
 export type ClientRequestParameters = {
     scopes?: Array<string>;
-    resource?: string;
+    resource?: string; // TODO: Confirm and remove
     extraQueryParameters?: StringDict;
     authority?: string;
     correlationId?: string;

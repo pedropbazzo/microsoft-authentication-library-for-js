@@ -19,7 +19,7 @@ import { Account } from "../account/Account";
  */
 export type TokenRenewParameters = ClientRequestParameters & {
     account?: Account;
-    sid?: string;
+    sid?: string; // TODO: Confirm to remove this, auth  code does not need this
     loginHint?: string;
     forceRefresh?: boolean;
 };

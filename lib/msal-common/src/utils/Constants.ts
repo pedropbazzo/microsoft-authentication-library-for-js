@@ -181,7 +181,8 @@ export enum SSOTypes {
  */
 export const BlacklistedEQParams = [
     SSOTypes.SID,
-    SSOTypes.LOGIN_HINT
+    SSOTypes.LOGIN_HINT,
+    SSOTypes.DOMAIN_HINT
 ];
 
 /**

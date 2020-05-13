@@ -7,7 +7,6 @@ import { ClientConfiguration } from "../config/ClientConfiguration";
 import { AuthenticationParameters } from "../request/AuthenticationParameters";
 import { TokenExchangeParameters } from "../request/TokenExchangeParameters";
 import { TokenRenewParameters } from "../request/TokenRenewParameters";
-import { ServerCodeRequestParameters } from "../server/ServerCodeRequestParameters";
 import { ServerTokenRequestParameters } from "../server/ServerTokenRequestParameters";
 import { CodeResponse } from "../response/CodeResponse";
 import { TokenResponse } from "../response/TokenResponse";
@@ -20,13 +19,17 @@ import { AccessTokenCacheItem } from "../cache/AccessTokenCacheItem";
 import { AuthorityFactory } from "../authority/AuthorityFactory";
 import { IdToken } from "../account/IdToken";
 import { ScopeSet } from "../request/ScopeSet";
-import { TemporaryCacheKeys, PersistentCacheKeys, AADServerParamKeys } from "../utils/Constants";
+import { TemporaryCacheKeys, PersistentCacheKeys, AADServerParamKeys, Constants } from "../utils/Constants";
 import { TimeUtils } from "../utils/TimeUtils";
 import { StringUtils } from "../utils/StringUtils";
 import { UrlString } from "../url/UrlString";
 import { Account } from "../account/Account";
 import { buildClientInfo } from "../account/ClientInfo";
 import { B2cAuthority } from "../authority/B2cAuthority";
+import { RequestParameterBuilder } from "../server/RequestParameterBuilder";
+import { RequestValidator } from "../request/RequestValidator";
+import { ProtocolUtils } from '../utils/ProtocolUtils';
+import { PkceCodes } from '../crypto/ICrypto';
 
 /**
  * SPAClient class
@@ -77,56 +80,74 @@ export class SPAClient extends BaseClient {
             throw ClientAuthError.createEndpointDiscoveryIncompleteError(e);
         }
 
-        // Create and validate request parameters.
-        let requestParameters: ServerCodeRequestParameters;
-        try {
-            requestParameters = new ServerCodeRequestParameters(
-                acquireTokenAuthority,
-                this.config.authOptions.clientId,
-                request,
-                this.getAccount(),
-                this.getRedirectUri(),
-                this.cryptoUtils,
-                isLoginCall
-            );
+        const parameterBuilder = new RequestParameterBuilder();
 
-            // Check for SSO.
-            let adalIdToken: IdToken = null;
-            if (!requestParameters.hasSSOParam()) {
-                // Only check for adal token if no SSO params are being used
-                const adalIdTokenString = this.cacheStorage.getItem(PersistentCacheKeys.ADAL_ID_TOKEN);
-                if (!StringUtils.isEmpty(adalIdTokenString)) {
-                    adalIdToken = new IdToken(adalIdTokenString, this.cryptoUtils);
-                    this.cacheStorage.removeItem(PersistentCacheKeys.ADAL_ID_TOKEN);
-                }
-            }
+        parameterBuilder.addClientId(this.config.authOptions.clientId);
 
-            // Update required cache entries for request.
-            this.cacheManager.updateCacheEntries(requestParameters, request.account);
-
-            // Populate query parameters (sid/login_hint/domain_hint) and any other extraQueryParameters set by the developer.
-            requestParameters.populateQueryParams(adalIdToken);
-
-            // Create url to navigate to.
-            const urlNavigate = await requestParameters.createNavigateUrl();
-
-            // Cache token request.
-            const tokenRequest: TokenExchangeParameters = {
-                scopes: requestParameters.scopes.getOriginalScopesAsArray(),
-                resource: request.resource,
-                codeVerifier: requestParameters.generatedPkce.verifier,
-                extraQueryParameters: request.extraQueryParameters,
-                authority: requestParameters.authorityInstance.canonicalAuthority,
-                correlationId: requestParameters.correlationId
-            };
-            this.cacheStorage.setItem(TemporaryCacheKeys.REQUEST_PARAMS, this.cryptoUtils.base64Encode(JSON.stringify(tokenRequest)));
-
-            return urlNavigate;
-        } catch (e) {
-            // Reset cache items before re-throwing.
-            this.cacheManager.resetTempCacheItems(requestParameters && requestParameters.state);
-            throw e;
+        // Set scopes, append extra scopes if there is a login call.
+        const scopeset = new ScopeSet(
+            (request && request.scopes) || [],
+            this.config.authOptions.clientId,
+            !isLoginCall
+        );
+        if (isLoginCall) {
+            scopeset.appendScopes(request && request.extraScopesToConsent);
         }
+        parameterBuilder.addScopes(scopeset);
+
+        // validate the redirectUri (to be a non null value)
+        RequestValidator.validateRedirectUri(this.getRedirectUri());
+        parameterBuilder.addRedirectUri(this.getRedirectUri());
+
+        // generate the correlationId if not set by the user and add
+        const correlationId = (request && request.correlationId) || this.config.cryptoInterface.createNewGuid();
+        parameterBuilder.addCorrelationId(correlationId);
+
+        // add response_mode. If not passed in it defaults to query.
+        parameterBuilder.addResponseMode(`${Constants.FRAGMENT_RESPONSE_MODE}`);
+
+        // add response_type = code
+        parameterBuilder.addResponseTypeCode();
+
+        // add code challenge
+        const generatedPkce: PkceCodes = await this.config.cryptoInterface.generatePkceCodes();
+        parameterBuilder.addCodeChallengeParams(generatedPkce.challenge, `${Constants.S256_CODE_CHALLENGE_METHOD}`);
+
+        // generate state
+        const state = ProtocolUtils.setRequestState(
+            request && request.userRequestState,
+            this.config.cryptoInterface.createNewGuid()
+        );
+        parameterBuilder.addState(state);
+
+        // add prompt
+        if (request && request.prompt) {
+            RequestValidator.validatePrompt(request.prompt);
+            parameterBuilder.addPrompt(request.prompt);
+        }
+
+        // add login_hint
+        // TODO: Are we supporting adal -> msal 2.0 migration?
+        if (request) {
+            const loginHint: string =
+                request.account && request.account.userName
+                    ? request.account.userName
+                    : request.loginHint ? request.loginHint : "";
+            parameterBuilder.addLoginHint(loginHint);
+        }
+
+        // add nonce
+        parameterBuilder.addNonce(this.config.cryptoInterface.createNewGuid());
+
+        // add extraQueryParams
+        parameterBuilder.addExtraQueryParameters(request && request.extraQueryParameters);
+
+        // TODO: Add explicit support for DOMAIN_HINT, break it from extraQueryParams; fixes with common request for node and browser
+        // TODO: Add a PR to remove "resource" support altogether
+        // TODO: Add `extraQueryParameters` support in node
+        // TODO: Why are we not adding LibraryInfo for /authorize endpoint?
+
+        return parameterBuilder.createQueryString();
     }
 
     /**
